@@ -43,7 +43,9 @@ async function main(): Promise<void> {
     // Check for credentials and provide status
     if (config.username && config.password) {
       console.log(`Authenticating as: ${config.username}`);
-      console.log("Approve the Duo MFA request on your phone when prompted.");
+      // The second factor is school-specific (Duo push at Purdue, a OneGate
+      // token at Javeriana, none at all elsewhere), so stay generic.
+      console.log("If your school asks for a second factor, approve it when prompted.");
     } else {
       console.log("No credentials. Opening browser for manual login.");
     }
@@ -93,8 +95,8 @@ async function main(): Promise<void> {
     console.error("\n=== Authentication failed ===");
     console.error("\nError:", error instanceof Error ? error.message : String(error));
     console.error("\nTroubleshooting tips:");
-    console.error("1. Ensure D2L_USERNAME and D2L_PASSWORD are set correctly in .env");
-    console.error("2. If MFA approval failed, make sure you approved the Duo push on your phone");
+    console.error("1. Re-run `brightspace-mcp-server setup` to check your saved username and password");
+    console.error("2. If a second factor was requested, make sure you approved it before the timeout");
     console.error("3. Check that you have a stable internet connection");
     console.error("4. Try running with D2L_HEADLESS=false to see the browser");
     console.error("\nFor more details, check the error message above.\n");
