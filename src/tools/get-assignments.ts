@@ -136,8 +136,13 @@ async function fetchCourseAssignments(
       // Skip hidden folders
       if (folder.IsHidden) continue;
 
-      // Fetch submissions for this folder
+      // Fetch submissions for this folder.
+      // Some tenants deny students access to mysubmissions (403 Not Authorized,
+      // seen at Javeriana Cali). An empty list then means "could not check",
+      // not "nothing submitted" — reporting those as the same thing makes the
+      // caller state that submitted work is missing, so track which one it is.
       let submissions: DropboxSubmission[] = [];
+      let submissionsKnown = true;
       try {
         const submissionsRaw = await apiClient.get<{ Objects: DropboxSubmission[] } | DropboxSubmission[]>(
           apiClient.le(courseId, `/dropbox/folders/${folder.Id}/submissions/mysubmissions/`),
@@ -145,9 +150,10 @@ async function fetchCourseAssignments(
         );
         submissions = Array.isArray(submissionsRaw) ? submissionsRaw : (submissionsRaw as any).Objects ?? [];
       } catch (error: any) {
-        // 404 means no submissions yet - that's fine
+        // 404 is how D2L reports "nothing submitted yet" — that one is known.
         if (error?.status !== 404) {
-          log("DEBUG", `Failed to fetch submissions for folder ${folder.Id}`, error);
+          submissionsKnown = false;
+          log("DEBUG", `Could not determine submission state for folder ${folder.Id}`, error);
         }
       }
 
@@ -189,6 +195,14 @@ async function fetchCourseAssignments(
             })) ?? [],
           })) ?? [],
         })) ?? null,
+        submissionStatus: !submissionsKnown
+          ? "unknown"
+          : submissions.length > 0
+            ? "submitted"
+            : "not_submitted",
+        submissionStatusNote: submissionsKnown
+          ? undefined
+          : "Brightspace denied access to this assignment's submission list, so whether it was submitted is unknown. Do not report it as missing or unsubmitted — tell the user to check Brightspace directly.",
         submission: submissions.length > 0
           ? {
               submittedDate: submissions[0].SubmissionDate,
@@ -229,8 +243,10 @@ async function fetchCourseAssignments(
       // Skip inactive quizzes
       if (!quiz.IsActive) continue;
 
-      // Fetch quiz attempts
+      // Fetch quiz attempts. Same caveat as dropbox submissions: a denied
+      // request must not masquerade as "no attempts made".
       let attempts: QuizAttemptData[] = [];
+      let attemptsKnown = true;
       try {
         const attemptsRaw = await apiClient.get<{ Objects: QuizAttemptData[] } | QuizAttemptData[]>(
           apiClient.le(courseId, `/quizzes/${quiz.QuizId}/attempts/`),
@@ -240,8 +256,9 @@ async function fetchCourseAssignments(
         attempts = Array.isArray(attemptsRaw) ? attemptsRaw : (attemptsRaw as any).Objects ?? [];
       } catch (error: any) {
         // 404 means no attempts yet - that's fine
-        if (error?.status !== 404 && error?.status !== 403) {
-          log("DEBUG", `Failed to fetch attempts for quiz ${quiz.QuizId}`, error);
+        if (error?.status !== 404) {
+          attemptsKnown = false;
+          log("DEBUG", `Could not determine attempts for quiz ${quiz.QuizId}`, error);
         }
       }
 
@@ -250,7 +267,10 @@ async function fetchCourseAssignments(
       let attemptsRemaining: number | string = "Unlimited";
       let attemptWarning: string | null = null;
 
-      if (quiz.AttemptsAllowed && !quiz.AttemptsAllowed.IsUnlimited) {
+      if (!attemptsKnown) {
+        // Never warn off data we could not read
+        attemptsRemaining = "unknown";
+      } else if (quiz.AttemptsAllowed && !quiz.AttemptsAllowed.IsUnlimited) {
         const allowed = quiz.AttemptsAllowed.NumberOfAttemptsAllowed ?? 0;
         attemptsRemaining = allowed - completedAttempts.length;
 
@@ -277,10 +297,13 @@ async function fetchCourseAssignments(
         attemptsAllowed: quiz.AttemptsAllowed?.IsUnlimited
           ? "Unlimited"
           : quiz.AttemptsAllowed?.NumberOfAttemptsAllowed ?? null,
-        attemptsUsed: completedAttempts.length,
+        attemptsUsed: attemptsKnown ? completedAttempts.length : null,
         attemptsRemaining,
         attemptWarning,
-        bestScore: completedAttempts.length > 0
+        attemptStatusNote: attemptsKnown
+          ? undefined
+          : "Brightspace denied access to this quiz's attempts, so it is unknown whether it was taken. Do not report it as not attempted.",
+        bestScore: attemptsKnown && completedAttempts.length > 0
           ? Math.max(...completedAttempts.map((a) => a.Score ?? 0))
           : null,
       };
@@ -308,7 +331,8 @@ export function registerGetAssignments(
     {
       title: "Get Assignments",
       description:
-        "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics.",
+        "Fetch assignments and quizzes for a specific course or all enrolled courses. Shows dropbox submissions and quizzes with due dates, status, and rubric info. Use this when the user asks about assignments, homework, what to submit, quizzes, or assignment details and rubrics. " +
+        "IMPORTANT: read submissionStatus, not the submission field, to decide whether something was turned in. Some schools block student access to submission and attempt data, in which case submissionStatus is \"unknown\" (and submission is null even though work may exist). Never tell the user an item is missing, pending or unsubmitted when the status is \"unknown\" — say you could not verify it and point them to Brightspace.",
       inputSchema: GetAssignmentsSchema,
     },
     async (args: any) => {
