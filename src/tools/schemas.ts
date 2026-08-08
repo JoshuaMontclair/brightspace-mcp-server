@@ -66,6 +66,17 @@ export const DownloadFileSchema = z.object({
     .describe("Custom filename for the downloaded file (include extension). If not provided, uses the original filename from Brightspace."),
 });
 
+export const GetAssignmentAttachmentSchema = z.object({
+  courseId: z.coerce.number().int().positive()
+    .describe("Course ID the assignment belongs to."),
+  folderId: z.coerce.number().int().positive()
+    .describe("Assignment (dropbox folder) ID — the `id` of the assignment from get_assignments."),
+  fileId: z.coerce.number().int().positive()
+    .describe("Attachment file ID, from the `attachments` array returned by get_assignments."),
+  downloadPath: z.string().min(1).optional()
+    .describe("Absolute path to a directory to also save the original file in. Ask the user before setting this."),
+});
+
 export const GetSyllabusSchema = z.object({
   courseId: z.coerce.number().int().positive()
     .describe("Course ID to get syllabus for."),

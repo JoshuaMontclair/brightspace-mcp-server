@@ -75,6 +75,7 @@ npx brightspace-mcp-server auth
 |-------|---------|
 | Grades | "Am I passing all my classes?" · "Compare my grades across all courses" |
 | Assignments | "What's due in the next 48 hours?" · "Summarize every assignment I haven't turned in yet" |
+| Assignment files | "Read the spreadsheet attached to Taller 1 and explain what it asks for" · "Summarize the handout for this week's lab" |
 | Announcements | "Did any professor post something important today?" · "What did my CS prof announce this week?" |
 | Course content | "Find the midterm review slides" · "Download every PDF from Module 5" |
 | Roster | "Who are the TAs for ECE 264?" · "Get me my instructor's email" |

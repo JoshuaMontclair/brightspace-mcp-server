@@ -19,6 +19,8 @@ interface DropboxFolder {
   CategoryId: number | null;
   Name: string;
   CustomInstructions: { Text: string; Html: string } | null;
+  /** Files the instructor attached to the assignment (not student work). */
+  Attachments: Array<{ FileId: number; FileName: string; Size: number }> | null;
   DueDate: string | null;
   IsHidden: boolean;
   Assessment: {
@@ -184,6 +186,13 @@ async function fetchCourseAssignments(
         dueDate: folder.DueDate,
         points: folder.Assessment?.ScoreDenominator ?? null,
         isGroup: folder.GroupTypeId !== null,
+        // Instructor-supplied handouts, worksheets, templates. Read their
+        // contents with get_assignment_attachment.
+        attachments: (folder.Attachments ?? []).map((a) => ({
+          fileId: a.FileId,
+          name: a.FileName,
+          size: a.Size,
+        })),
         rubric: folder.Assessment?.Rubrics?.map((r) => ({
           name: r.Name,
           criteria: r.Criteria?.map((c) => ({

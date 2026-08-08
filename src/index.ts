@@ -23,6 +23,7 @@ import {
   registerGetMyGrades,
   registerGetAnnouncements,
   registerGetAssignments,
+  registerGetAssignmentAttachment,
   registerGetCourseContent,
   registerDownloadFile,
   registerGetClasslistEmails,
@@ -181,19 +182,20 @@ if (subcommand === 'setup') {
       registerGetMyGrades(server, apiClient, config);
       registerGetAnnouncements(server, apiClient, config);
       registerGetAssignments(server, apiClient, config);
+      registerGetAssignmentAttachment(server, apiClient);
       registerGetCourseContent(server, apiClient);
       registerDownloadFile(server, apiClient);
       registerGetClasslistEmails(server, apiClient);
       registerGetRoster(server, apiClient);
       registerGetSyllabus(server, apiClient);
       registerGetDiscussions(server, apiClient);
-      log("DEBUG", "MCP tools registered (11 core tools, total 12 with check_auth)");
+      log("DEBUG", "MCP tools registered (12 core tools, total 13 with check_auth)");
 
       // Connect stdio transport
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (12 tools registered)");
+      log("INFO", "Brightspace MCP Server by Rohan Muppa — running on stdio (13 tools registered)");
       log("INFO", "Setup: see README.md for MCP client configuration (Claude Desktop, ChatGPT Desktop, Cursor, etc.)");
     } catch (error) {
       log("ERROR", "MCP Server failed to start", error);

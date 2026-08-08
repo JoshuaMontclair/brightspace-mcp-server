@@ -78,7 +78,8 @@ Registered in `src/tools/index.ts`, schemas in `src/tools/schemas.ts`:
 |------|---------|
 | `get_my_courses` | List enrolled courses |
 | `get_my_grades` | Grades for a course or all courses |
-| `get_assignments` | Assignments with due dates and submission status |
+| `get_assignments` | Assignments with due dates, attachments and submission status |
+| `get_assignment_attachment` | Read an instructor's assignment file as text (xlsx, docx, pptx, pdf) |
 | `get_upcoming_due_dates` | Due dates across all courses within a window |
 | `get_announcements` | Recent course announcements |
 | `get_syllabus` | Syllabus document for a course |
@@ -125,6 +126,8 @@ src/
     download-helpers.ts     Stream-to-disk with validation
     file-validator.ts       Magic-byte file-type checks
     html-converter.ts       HTML to Markdown via turndown
+    file-text.ts            Dispatches a downloaded file to a text extractor
+    office-extractor.ts     xlsx/docx/pptx to text
     pdf-extractor.ts        PDF text extraction via unpdf
     logger.ts               Structured logging
     update-checker.ts       npm version comparison
