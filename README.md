@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, announcem
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Works with any school that uses D2L Brightspace, including Purdue, USC, and hundreds more.
+Reads data from any school that uses D2L Brightspace. Automated login ships for Purdue and Javeriana Cali; at other schools you log in yourself in the browser window that opens (leave the password blank during setup).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -28,7 +28,7 @@ Paste this into Claude Code, Cursor, Windsurf, Copilot, Codex, or any AI coding 
 ```
 Install brightspace-mcp-server for me by following
 https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
-(use --purdue if I'm at Purdue).
+(use --purdue if I'm at Purdue, --javeriana if I'm at Javeriana Cali).
 ```
 
 **Option 2: Run it yourself**
@@ -37,10 +37,11 @@ https://github.com/RohanMuppa/brightspace-mcp-server/blob/main/LLMs.md
 npx brightspace-mcp-server setup
 ```
 
-Purdue students can add `--purdue` to skip entering the school URL:
+Add your school's flag to skip entering the URL:
 
 ```bash
-npx brightspace-mcp-server setup --purdue
+npx brightspace-mcp-server setup --purdue      # Purdue University
+npx brightspace-mcp-server setup --javeriana   # Pontificia Universidad Javeriana Cali
 ```
 
 The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
@@ -98,7 +99,7 @@ npm install
 npm run dev
 ```
 
-**Add your school:** Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, add a handler in `src/auth/`.
+**Add your school:** Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If your school's login flow is different, implement the `SSOFlow` interface (`src/auth/sso-flow.ts`) in a new file under `src/auth/` and register your Brightspace hostname in `FLOWS_BY_HOSTNAME` in `src/auth/sso-factory.ts`. Use `src/auth/javeriana-sso.ts` as a template.
 
 **Add a new tool:** Create a file in `src/tools/`, add the schema in `schemas.ts`, export it in `src/tools/index.ts`, and register it in `src/index.ts`. Use any existing tool as a template.
 

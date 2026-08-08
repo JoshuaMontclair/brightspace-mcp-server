@@ -5,6 +5,7 @@
  */
 
 import type { Page } from "playwright";
+import type { SSOFlow, SSOFlowConfig } from "./sso-flow.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 
@@ -15,15 +16,10 @@ const SELECTORS = {
   staySignedInYes: "input[type=submit][value='Yes']",
 } as const;
 
-interface PurdueSSOConfig {
-  username?: string;
-  password?: string;
-}
+export class PurdueSSOFlow implements SSOFlow {
+  private config: SSOFlowConfig;
 
-export class PurdueSSOFlow {
-  private config: PurdueSSOConfig;
-
-  constructor(config: PurdueSSOConfig) {
+  constructor(config: SSOFlowConfig) {
     this.config = config;
   }
 

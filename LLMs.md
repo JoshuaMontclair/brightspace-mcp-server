@@ -30,14 +30,15 @@ If Node is missing or below v18, tell the user to install the LTS from https://n
 npx brightspace-mcp-server setup
 ```
 
-If the user is at Purdue, use the preset:
+If the user's school has a preset, use it:
 
 ```bash
-npx brightspace-mcp-server setup --purdue
+npx brightspace-mcp-server setup --purdue      # Purdue University
+npx brightspace-mcp-server setup --javeriana   # Pontificia Universidad Javeriana Cali
 ```
 
 The wizard:
-- prompts for the school's Brightspace URL (skipped with `--purdue`)
+- prompts for the school's Brightspace URL (skipped when a school flag is given)
 - launches a Playwright Chromium browser for login and MFA (Duo push, etc.)
 - saves credentials to `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session to `~/.d2l-session/session.json` (AES-256-GCM)
@@ -111,7 +112,10 @@ src/
   auth/
     auth-runner.ts          Orchestrates reauth on 401/expiry
     browser-auth.ts         Playwright-driven login flow
-    purdue-sso.ts           Purdue-specific SSO handler
+    javeriana-sso.ts        Javeriana Cali SSO handler (MobilityGuard OneGate)
+    purdue-sso.ts           Purdue SSO handler (Shibboleth + Duo)
+    sso-factory.ts          Picks the login flow from the Brightspace hostname
+    sso-flow.ts             SSOFlow interface every school handler implements
     session-store.ts        AES-256-GCM session persistence
     token-manager.ts        Token refresh and validation
   utils/
@@ -134,6 +138,7 @@ src/
 |---------|--------------|
 | `npx brightspace-mcp-server setup` | Interactive setup wizard |
 | `npx brightspace-mcp-server setup --purdue` | Setup with Purdue preset |
+| `npx brightspace-mcp-server setup --javeriana` | Setup with Javeriana Cali preset |
 | `npx brightspace-mcp-server auth` | Manual reauth |
 | `npx -y brightspace-mcp-server@latest` | Run the MCP server (registered in AI client config) |
 | `npm run build` | Compile TypeScript to `build/` |
@@ -152,7 +157,9 @@ src/
 
 ## Adding a school
 
-Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-standard login flow (SAML, Shibboleth, custom SSO), add a handler in `src/auth/` alongside `purdue-sso.ts`.
+1. Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`.
+2. If the school's IdP differs, implement the `SSOFlow` interface (`src/auth/sso-flow.ts`) in a new `src/auth/<school>-sso.ts`, using `javeriana-sso.ts` as a template.
+3. Register the Brightspace hostname in `FLOWS_BY_HOSTNAME` in `src/auth/sso-factory.ts`. Unregistered hosts fall back to the Purdue flow, so registration is what makes automated login work.
 
 ## Adding a tool
 

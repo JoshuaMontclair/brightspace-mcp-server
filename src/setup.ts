@@ -40,6 +40,13 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     usernameLabel: "Purdue career account username",
     mfaNote: "Approve the Duo push on your phone.",
   },
+  javeriana: {
+    name: "Pontificia Universidad Javeriana Cali",
+    baseUrl: "https://auladigital.javerianacali.edu.co",
+    usernameLabel: "Javeriana username",
+    mfaNote:
+      "If OneGate asks for a second factor (token, SMS or email), complete it in the browser window that opens.",
+  },
 };
 
 // Parse --purdue, --osu, etc. from argv

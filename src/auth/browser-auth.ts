@@ -12,15 +12,17 @@ import * as os from "node:os";
 import type { AppConfig, TokenData } from "../types/index.js";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
-import { PurdueSSOFlow } from "./purdue-sso.js";
+import type { SSOFlow } from "./sso-flow.js";
+import { createSSOFlow } from "./sso-factory.js";
 
 export class BrowserAuth {
   private config: AppConfig;
-  private ssoFlow: PurdueSSOFlow;
+  private ssoFlow: SSOFlow;
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.ssoFlow = new PurdueSSOFlow({
+    this.ssoFlow = createSSOFlow({
+      baseUrl: config.baseUrl,
       username: config.username,
       password: config.password,
     });
@@ -227,6 +229,10 @@ export class BrowserAuth {
       // Use longer timeout for manual login (5 min) vs automated SSO (2 min)
       const interceptTimeout = this.ssoFlow.hasCredentials() ? 120000 : 300000;
       const tokenPromise = this.setupTokenInterception(page, interceptTimeout);
+      // The extraction chain usually wins before this fires. Keep a handler
+      // attached so its timeout never surfaces as an unhandled rejection during
+      // an otherwise successful login (a second factor can outlast the timeout).
+      tokenPromise.catch(() => {});
 
       // Navigate and login if needed
       const alreadyAuthenticated = await this.navigateAndLogin(page);
@@ -254,6 +260,7 @@ export class BrowserAuth {
         await page.close();
         const freshPage = await context.newPage();
         const freshTokenPromise = this.setupTokenInterception(freshPage);
+        freshTokenPromise.catch(() => {});
         await this.navigateAndLogin(freshPage);
 
         const freshExtracted = await this.tryExtractToken(freshPage, context);
@@ -479,6 +486,13 @@ export class BrowserAuth {
         timeout: 30000,
       });
 
+      // Some tenants (e.g. Javeriana Cali) serve /d2l/home as an HTML stub that
+      // hops to /d2l/login via window.location.replace() instead of answering
+      // with a 302. At domcontentloaded the URL is still /d2l/home, so reading
+      // it here would report "already authenticated" for a logged-out session
+      // and skip login entirely. Let the redirect chain settle first.
+      await this.settleRedirects(page);
+
       const currentUrl = page.url();
       log("DEBUG", `Current URL after navigation: ${currentUrl}`);
 
@@ -500,12 +514,15 @@ export class BrowserAuth {
           throw new BrowserAuthError("SSO login flow failed", "sso_login");
         }
 
-        await page.waitForLoadState("networkidle", { timeout: 30000 });
+        // Settle, but never fail here: we are already logged in, and some
+        // Brightspace home pages (Javeriana Cali among them) long-poll forever,
+        // so networkidle never arrives. Throwing would discard a good session.
+        await this.settleRedirects(page);
         return false;
       }
 
       log("INFO", "Already authenticated - skipping SSO login");
-      await page.waitForLoadState("networkidle", { timeout: 30000 });
+      await this.settleRedirects(page);
       return true;
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
@@ -514,6 +531,27 @@ export class BrowserAuth {
         "navigate_login",
         error as Error
       );
+    }
+  }
+
+  /**
+   * Wait for client-side redirects to settle so page.url() reflects where we
+   * actually ended up. Never throws — a timeout here just means we fall back to
+   * whatever URL the page reports.
+   */
+  private async settleRedirects(page: Page): Promise<void> {
+    try {
+      await page.waitForLoadState("load", { timeout: 15000 });
+    } catch {
+      log("DEBUG", "Page did not reach load state within 15s");
+    }
+    // Best-effort only, on a short budget: a Brightspace home page that
+    // long-polls never goes idle, and waiting the full window each time just
+    // adds latency to a session that is already usable.
+    try {
+      await page.waitForLoadState("networkidle", { timeout: 5000 });
+    } catch {
+      log("DEBUG", "Page never reached networkidle — continuing anyway");
     }
   }
 
