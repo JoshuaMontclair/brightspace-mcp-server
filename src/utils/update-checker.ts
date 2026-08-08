@@ -55,6 +55,25 @@ async function clearAllNpxCaches(): Promise<number> {
   return cleared;
 }
 
+/**
+ * True when `candidate` is a strictly newer release than `current`.
+ *
+ * An inequality check is not enough: anyone running a local build ahead of npm
+ * (a fork, or a release not published yet) would otherwise be "updated"
+ * backwards to the published version on every start.
+ */
+function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string) =>
+    v.split("-")[0].split(".").map((n) => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
+}
+
 const FALLBACK_MSG = (old: string, latest: string) =>
   `Update available: v${old} → v${latest}. ` +
   "Run `npx brightspace-mcp-server@latest` or clear your npx cache to update.";
@@ -65,7 +84,7 @@ export function initUpdateChecker(): void {
   exec("npm view brightspace-mcp-server version", { timeout: 10000 }, (err, stdout) => {
     if (err) return;
     const latest = stdout.trim();
-    if (!latest || latest === installed) return;
+    if (!latest || !isNewerVersion(latest, installed)) return;
 
     if (isNpxCache()) {
       clearAllNpxCaches()
