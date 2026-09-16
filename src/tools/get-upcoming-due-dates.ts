@@ -5,7 +5,12 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import {
+  D2LApiClient,
+  DEFAULT_CACHE_TTLS,
+  fetchAllItems,
+  fetchAllObjects,
+} from "../api/index.js";
 import {
   GetUpcomingDueDatesSchema,
 } from "./schemas.js";
@@ -33,10 +38,6 @@ interface EnrollmentItem {
   Access: {
     IsActive: boolean;
   };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
 }
 
 /**
@@ -74,14 +75,17 @@ export function registerGetUpcomingDueDates(
         if (courseId) {
           orgUnitIds = String(courseId);
         } else {
-          const enrollments = await apiClient.get<{ Items: EnrollmentItem[] }>(
+          // Every page of them — a course missed here is a course whose due
+          // dates are never even asked for
+          const enrollments = await fetchAllItems<EnrollmentItem>(
+            apiClient,
             apiClient.lp(`/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true`),
             { ttl: DEFAULT_CACHE_TTLS.enrollments }
           );
 
           // Apply course filter
           const filteredEnrollments = applyCourseFilter(
-            enrollments.Items.map(item => ({
+            enrollments.map(item => ({
               id: item.OrgUnit.Id,
               name: item.OrgUnit.Name,
               code: item.OrgUnit.Code,
@@ -100,12 +104,12 @@ export function registerGetUpcomingDueDates(
           `/calendar/events/myEvents/?startDateTime=${encodeURIComponent(startDateTime)}&endDateTime=${encodeURIComponent(endDateTime)}&orgUnitIdsCSV=${orgUnitIds}`
         );
 
-        // Fetch events — D2L returns ObjectListPage wrapper with "Objects" array (NOT "Items")
-        const response = await apiClient.get<{ Objects: EventDataInfo[]; Next: string | null }>(path, {
+        // Fetch events — D2L returns ObjectListPage wrapper with "Objects" array
+        // (NOT "Items"), and a busy window runs past one page
+        const events = await fetchAllObjects<EventDataInfo>(apiClient, path, {
           ttl: DEFAULT_CACHE_TTLS.assignments,
         });
-        const events = response.Objects ?? [];
-        log("DEBUG", `get_upcoming_due_dates: raw response keys=${Object.keys(response).join(",")}, event count=${events.length}`);
+        log("DEBUG", `get_upcoming_due_dates: event count=${events.length}`);
 
         // Map to clean objects and sort by end date (soonest due first)
         const mappedEvents = events

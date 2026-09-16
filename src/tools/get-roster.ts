@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { D2LApiClient, DEFAULT_CACHE_TTLS, fetchAllObjects } from "../api/index.js";
 import {
   GetRosterSchema,
 } from "./schemas.js";
@@ -24,24 +24,25 @@ interface ClasslistUser {
   LastAccessed: string | null;
 }
 
-interface ClasslistResponse {
-  Objects: ClasslistUser[];
-  Next?: string | null;
-}
-
 // Purdue-specific role IDs. These are institution-specific values.
 // If using at another institution, you may need to adjust these.
 // Discover by fetching classlist for a known course and inspecting RoleId values.
 const INSTRUCTOR_ROLE_ID = 109;
 const TA_ROLE_ID = 135;
 
+// A whole classlist can be thousands of people, which no MCP client wants in
+// one response. The cap is deliberate and only applies to the includeStudents
+// path; it is reported in the logs rather than applied quietly.
+const MAX_STUDENTS_RETURNED = 100;
+
 /**
- * Fetch a page of classlist users with optional filters
+ * Fetch classlist users matching the optional filters, walking pages until the
+ * endpoint runs out of them or maxItems is reached.
  */
-async function fetchClasslistPage(
+async function fetchClasslistUsers(
   apiClient: D2LApiClient,
   courseId: number,
-  options?: { roleId?: number; searchTerm?: string }
+  options?: { roleId?: number; searchTerm?: string; maxItems?: number }
 ): Promise<ClasslistUser[]> {
   const params = new URLSearchParams();
 
@@ -59,19 +60,10 @@ async function fetchClasslistPage(
     `/classlist/paged/${queryString ? "?" + queryString : ""}`
   );
 
-  const response = await apiClient.get<ClasslistResponse>(path, {
+  return fetchAllObjects<ClasslistUser>(apiClient, path, {
     ttl: DEFAULT_CACHE_TTLS.roster,
+    maxItems: options?.maxItems,
   });
-
-  if (response.Next) {
-    log(
-      "WARN",
-      "get_roster: Pagination detected but not implemented. Some users may be missing.",
-      { courseId, next: response.Next }
-    );
-  }
-
-  return response.Objects;
 }
 
 /**
@@ -101,11 +93,11 @@ export function registerGetRoster(
         if (!includeStudents) {
           // Fetch instructors and TAs in parallel
           const [instructorResult, taResult] = await Promise.allSettled([
-            fetchClasslistPage(apiClient, courseId, {
+            fetchClasslistUsers(apiClient, courseId, {
               roleId: INSTRUCTOR_ROLE_ID,
               searchTerm,
             }),
-            fetchClasslistPage(apiClient, courseId, {
+            fetchClasslistUsers(apiClient, courseId, {
               roleId: TA_ROLE_ID,
               searchTerm,
             }),
@@ -128,18 +120,29 @@ export function registerGetRoster(
             });
           }
         } else {
-          // Fetch all users
-          allUsers = await fetchClasslistPage(apiClient, courseId, {
+          // One item past the cap, not the whole classlist. Everything beyond
+          // MAX_STUDENTS_RETURNED is discarded below, and a 900-student lecture
+          // would otherwise spend eight extra serial round trips — rate-limit
+          // budget shared with every other tool, and eight more chances for a
+          // 429 to fail a roster the first page had already answered.
+          allUsers = await fetchClasslistUsers(apiClient, courseId, {
             searchTerm,
+            maxItems: MAX_STUDENTS_RETURNED + 1,
           });
 
-          // Cap at 100 users to prevent MCP response size issues
-          if (allUsers.length > 100) {
-            log("WARN", "get_roster: Result set exceeds 100 users, truncating", {
-              total: allUsers.length,
-              returned: 100,
-            });
-            allUsers = allUsers.slice(0, 100);
+          // Stopping one past the cap is what keeps this notice honest: the
+          // exact enrollment total is no longer known, but "more than the cap"
+          // still is, which is all the truncation claims.
+          if (allUsers.length > MAX_STUDENTS_RETURNED) {
+            log(
+              "WARN",
+              `get_roster: More than ${MAX_STUDENTS_RETURNED} users in the classlist, truncating`,
+              {
+                courseId,
+                returned: MAX_STUDENTS_RETURNED,
+              }
+            );
+            allUsers = allUsers.slice(0, MAX_STUDENTS_RETURNED);
           }
         }
 

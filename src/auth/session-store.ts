@@ -23,10 +23,12 @@ const IV_LENGTH = 12; // GCM recommended IV length
 const AUTH_TAG_LENGTH = 16; // GCM auth tag length
 const SALT_LENGTH = 16;
 const SALT_FILE_NAME = "salt";
+const KEY_LENGTH = 32; // 256 bits, for AES-256
 
 /**
  * SessionStore manages encrypted token persistence to disk.
- * Uses AES-256-GCM for encryption with a key derived from username + hostname.
+ * Uses AES-256-GCM for encryption with a key derived from the username and a
+ * per-installation random salt.
  */
 export class SessionStore {
   private readonly sessionDir: string;
@@ -38,13 +40,23 @@ export class SessionStore {
   }
 
   /**
+   * Read the existing salt, never creating one.
+   * The load path uses this rather than getOrCreateSalt: minting a fresh salt
+   * while reading old data would change the key and turn a session that is
+   * merely unreadable right now into one that can never be recovered.
+   */
+  private readSalt(): Buffer {
+    return fsSync.readFileSync(path.join(this.sessionDir, SALT_FILE_NAME));
+  }
+
+  /**
    * Get or create a random salt unique to this installation.
    * Stored at ~/.d2l-session/salt with restricted permissions.
    */
   private getOrCreateSalt(): Buffer {
     const saltPath = path.join(this.sessionDir, SALT_FILE_NAME);
     try {
-      return fsSync.readFileSync(saltPath);
+      return this.readSalt();
     } catch {
       // Salt doesn't exist yet — create session dir and generate one
       const isWindows = process.platform === "win32";
@@ -61,17 +73,36 @@ export class SessionStore {
   }
 
   /**
-   * Derive AES-256 key from username and hostname using scrypt.
-   * Uses a per-installation random salt to prevent precomputation attacks.
+   * Derive the AES-256 key from the username plus the per-installation salt.
+   *
+   * The hostname used to be part of the key material, but macOS rewrites the
+   * hostname when the machine joins certain networks, so a user could lose a
+   * saved session just by changing wifi. Narrowing the material costs nothing
+   * real: neither the username nor the hostname is secret — anyone who can read
+   * session.json can read both — so the salt is what actually supplies the
+   * entropy, and it stays. This encryption keeps a token out of plaintext in
+   * backups, sync folders and stray `cat`s; it was never a defence against
+   * someone who already has read access to ~/.d2l-session, and a key derived
+   * from stable material defends exactly as well against that.
    */
-  private deriveKey(): Buffer {
-    const username = os.userInfo().username;
-    const hostname = os.hostname();
-    const keyMaterial = username + hostname;
-    const salt = this.getOrCreateSalt();
+  private deriveKey(salt?: Buffer): Buffer {
+    return crypto.scryptSync(
+      os.userInfo().username,
+      salt ?? this.getOrCreateSalt(),
+      KEY_LENGTH
+    );
+  }
 
-    // Use scrypt to derive a 32-byte key (256 bits for AES-256)
-    return crypto.scryptSync(keyMaterial, salt, 32);
+  /**
+   * The pre-migration key material (username + hostname), for reading sessions
+   * written by older versions. Only load() uses it; nothing writes it any more.
+   */
+  private deriveLegacyKey(salt: Buffer): Buffer {
+    return crypto.scryptSync(
+      os.userInfo().username + os.hostname(),
+      salt,
+      KEY_LENGTH
+    );
   }
 
   /**
@@ -100,8 +131,7 @@ export class SessionStore {
    * Decrypt ciphertext using AES-256-GCM.
    * Returns plaintext string, or throws if auth tag verification fails.
    */
-  private decrypt(encrypted: EncryptedData): string {
-    const key = this.deriveKey();
+  private decrypt(encrypted: EncryptedData, key: Buffer = this.deriveKey()): string {
     const iv = Buffer.from(encrypted.iv, "hex");
     const authTag = Buffer.from(encrypted.authTag, "hex");
 
@@ -173,9 +203,38 @@ export class SessionStore {
       const fileContent = await fs.readFile(this.sessionFilePath, "utf-8");
       const sessionFile: SessionFile = JSON.parse(fileContent);
 
-      // Decrypt token data
-      const plaintext = this.decrypt(sessionFile.encrypted);
+      // Read the salt rather than minting one: see readSalt.
+      const salt = this.readSalt();
+
+      let plaintext: string;
+      let usedLegacyKey = false;
+      try {
+        plaintext = this.decrypt(sessionFile.encrypted, this.deriveKey(salt));
+      } catch {
+        // Written before the hostname was dropped from the key material.
+        // Trying a second key is safe because GCM authenticates: a corrupted or
+        // tampered file fails under both keys and falls through to the catch
+        // below, which still returns null.
+        plaintext = this.decrypt(
+          sessionFile.encrypted,
+          this.deriveLegacyKey(salt)
+        );
+        usedLegacyKey = true;
+      }
+
       const token: TokenData = JSON.parse(plaintext);
+
+      if (usedLegacyKey) {
+        // Migrate in place so the fallback is needed exactly once. A failure
+        // here is not fatal — the session itself is fine and the next load
+        // simply falls back again — so it must not fail the load.
+        try {
+          await this.save(token);
+          log("DEBUG", "Re-encrypted session with the hostname-free key");
+        } catch {
+          log("WARN", "Could not re-encrypt legacy session; will retry later");
+        }
+      }
 
       log("DEBUG", `Session loaded from ${this.sessionFilePath}`);
       return token;

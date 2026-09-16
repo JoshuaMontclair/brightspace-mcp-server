@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { D2LApiClient, DEFAULT_CACHE_TTLS, fetchAllItems } from "../api/index.js";
 import {
   GetAnnouncementsSchema,
 } from "./schemas.js";
@@ -40,14 +40,6 @@ interface EnrollmentItem {
     ClasslistRoleName: string;
     IsActive: boolean;
     LastAccessed: string | null;
-  };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
-  PagingInfo?: {
-    HasMoreItems: boolean;
-    Bookmark?: string;
   };
 }
 
@@ -111,14 +103,17 @@ export function registerGetAnnouncements(
         const enrollmentPath = apiClient.lp(
           "/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true"
         );
-        const enrollmentResponse = await apiClient.get<EnrollmentResponse>(
+        // Every page of them: courses past the first page used to be skipped
+        // here, so their announcements never appeared at all.
+        const enrollments = await fetchAllItems<EnrollmentItem>(
+          apiClient,
           enrollmentPath,
           { ttl: DEFAULT_CACHE_TTLS.enrollments }
         );
 
         // Apply course filter
         const filteredEnrollments = applyCourseFilter(
-          enrollmentResponse.Items.map(item => ({
+          enrollments.map(item => ({
             id: item.OrgUnit.Id,
             name: item.OrgUnit.Name,
             code: item.OrgUnit.Code,
@@ -169,7 +164,9 @@ export function registerGetAnnouncements(
           )
           .flatMap((r) => r.value);
 
-        // Sort by created date and slice to count
+        // Sort by created date and slice to count. Walking every page of
+        // enrollments brings in more announcements than before, and `count` is
+        // a promise to the caller, so the cap stays — and gets said out loud.
         const announcements = allAnnouncements
           .sort(
             (a, b) =>
@@ -180,7 +177,10 @@ export function registerGetAnnouncements(
 
         log(
           "INFO",
-          `get_announcements: Retrieved ${announcements.length} announcements (out of ${allAnnouncements.length} total across ${enrollmentResponse.Items.length} courses)`
+          `get_announcements: Retrieved ${announcements.length} announcements (out of ${allAnnouncements.length} total across ${enrollments.length} courses)` +
+            (allAnnouncements.length > count
+              ? ` — capped to the requested count of ${count}`
+              : "")
         );
         return toolResponse(announcements);
       } catch (error) {

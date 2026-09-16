@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { D2LApiClient, DEFAULT_CACHE_TTLS, fetchAllItems } from "../api/index.js";
 import {
   GetMyCoursesSchema,
 } from "./schemas.js";
@@ -24,14 +24,6 @@ interface EnrollmentItem {
     ClasslistRoleName: string;
     IsActive: boolean;
     LastAccessed: string | null;
-  };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
-  PagingInfo?: {
-    HasMoreItems: boolean;
-    Bookmark?: string;
   };
 }
 
@@ -63,23 +55,15 @@ export function registerGetMyCourses(
           `/enrollments/myenrollments/?orgUnitTypeId=3${activeOnly ? "&isActive=true" : ""}`
         );
 
-        // Fetch enrollments
-        const response = await apiClient.get<EnrollmentResponse>(path, {
+        // Fetch every page of enrollments — a student with more courses than
+        // one page used to silently lose the rest
+        const items = await fetchAllItems<EnrollmentItem>(apiClient, path, {
           ttl: DEFAULT_CACHE_TTLS.enrollments,
         });
 
-        // Check for pagination
-        if (response.PagingInfo?.HasMoreItems) {
-          log(
-            "WARN",
-            "get_my_courses: Pagination detected but not implemented. Some courses may be missing.",
-            { hasMore: true }
-          );
-        }
-
         // Map to clean objects and apply course filter
         const courses = applyCourseFilter(
-          response.Items.map((item) => ({
+          items.map((item) => ({
             id: item.OrgUnit.Id,
             name: item.OrgUnit.Name,
             code: item.OrgUnit.Code,

@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { D2LApiClient, DEFAULT_CACHE_TTLS } from "../api/index.js";
+import { D2LApiClient, DEFAULT_CACHE_TTLS, fetchAllItems } from "../api/index.js";
 import {
   GetMyGradesSchema,
 } from "./schemas.js";
@@ -38,14 +38,6 @@ interface EnrollmentItem {
     ClasslistRoleName: string;
     IsActive: boolean;
     LastAccessed: string | null;
-  };
-}
-
-interface EnrollmentResponse {
-  Items: EnrollmentItem[];
-  PagingInfo?: {
-    HasMoreItems: boolean;
-    Bookmark?: string;
   };
 }
 
@@ -100,14 +92,17 @@ export function registerGetMyGrades(
         const enrollmentPath = apiClient.lp(
           "/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true"
         );
-        const enrollmentResponse = await apiClient.get<EnrollmentResponse>(
+        // Every page of them: courses past the first page used to be skipped
+        // here, so their grades never appeared at all.
+        const enrollments = await fetchAllItems<EnrollmentItem>(
+          apiClient,
           enrollmentPath,
           { ttl: DEFAULT_CACHE_TTLS.enrollments }
         );
 
         // Apply course filter
         const filteredEnrollments = applyCourseFilter(
-          enrollmentResponse.Items.map(item => ({
+          enrollments.map(item => ({
             id: item.OrgUnit.Id,
             name: item.OrgUnit.Name,
             code: item.OrgUnit.Code,
@@ -167,7 +162,7 @@ export function registerGetMyGrades(
 
         log(
           "INFO",
-          `get_my_grades: Retrieved grades for ${courses.length} courses (out of ${enrollmentResponse.Items.length} enrolled)`
+          `get_my_grades: Retrieved grades for ${courses.length} courses (out of ${enrollments.length} enrolled)`
         );
         return toolResponse({ courses });
       } catch (error) {
