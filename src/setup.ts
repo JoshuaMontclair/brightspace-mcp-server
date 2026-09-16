@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { saveConfigStore, getConfigStorePath } from "./utils/config-store.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
+import { parseTotpSecret, generateTotp, secondsLeftInWindow } from "./utils/totp.js";
 
 // ANSI helpers
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
@@ -45,7 +46,8 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
     baseUrl: "https://auladigital.javerianacali.edu.co",
     usernameLabel: "Javeriana username",
     mfaNote:
-      "If OneGate asks for a second factor (token, SMS or email), complete it in the browser window that opens.",
+      "OneGate asks for an authenticator code. Save the setup key below and it will be filled in for you; " +
+      "any other factor (SMS or email) is completed in the browser window that opens.",
   },
 };
 
@@ -103,9 +105,12 @@ function askPassword(prompt: string): Promise<string> {
     process.stdin.resume();
 
     const onData = (key: Buffer) => {
-      const ch = key.toString("utf-8");
+      // A pasted value arrives as one chunk, newline and all, so the chunk is
+      // walked character by character instead of being compared whole.
+      const chunk = key.toString("utf-8");
+
       // Ctrl+C
-      if (ch === "\x03") {
+      if (chunk.includes("\x03")) {
         process.stdout.write = origWrite;
         process.stdin.setRawMode?.(false);
         process.stdin.removeListener("data", onData);
@@ -113,31 +118,71 @@ function askPassword(prompt: string): Promise<string> {
         console.log("");
         process.exit(0);
       }
-      // Enter
-      if (ch === "\r" || ch === "\n") {
+
+      const newlineIndex = chunk.search(/[\r\n]/);
+      const typed = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
+
+      for (const ch of typed) {
+        // Backspace
+        if (ch === "\x7f" || ch === "\b") {
+          if (password.length > 0) {
+            password = password.slice(0, -1);
+            origWrite("\b \b");
+          }
+          continue;
+        }
+        password += ch;
+        origWrite("*");
+      }
+
+      // Enter (typed, or riding along at the end of a paste)
+      if (newlineIndex !== -1) {
         process.stdout.write = origWrite;
         process.stdin.setRawMode?.(false);
         process.stdin.removeListener("data", onData);
         rl.close();
         origWrite("\n");
         resolve(password);
-        return;
       }
-      // Backspace
-      if (ch === "\x7f" || ch === "\b") {
-        if (password.length > 0) {
-          password = password.slice(0, -1);
-          origWrite("\b \b");
-        }
-        return;
-      }
-      // Normal character
-      password += ch;
-      origWrite("*");
     };
 
     process.stdin.on("data", onData);
   });
+}
+
+/**
+ * Prompt for an authenticator setup key until it parses, or the user skips.
+ *
+ * The key is verified by generating a code from it on the spot: a secret that
+ * produces the wrong code is worse than no secret at all, because it fails
+ * silently months later during an unattended re-auth.
+ */
+async function askTotpSecret(): Promise<string | undefined> {
+  for (;;) {
+    const raw = (await askPassword("  Authenticator setup key (optional): ")).trim();
+    if (!raw) return undefined;
+
+    try {
+      const totp = parseTotpSecret(raw);
+      const code = generateTotp(totp);
+      console.log(
+        green(
+          `  Key accepted${totp.label ? ` for ${totp.label}` : ""} — your code right now is ${code}`,
+        ),
+      );
+      console.log(
+        dim(
+          `  Check that against your authenticator app (it changes in ${secondsLeftInWindow(totp)}s).`,
+        ),
+      );
+      return raw;
+    } catch (error) {
+      console.log(
+        yellow(`  ${error instanceof Error ? error.message : String(error)}`),
+      );
+      console.log(dim("  Try again, or press Enter to skip."));
+    }
+  }
 }
 
 // ── URL validation ─────────────────────────────────────────────────
@@ -353,18 +398,20 @@ async function main(): Promise<void> {
   }
   console.log("");
 
-  // Re-open readline for remaining prompts
-  const rl2 = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  // ── Step 4: MFA info ─────────────────────────────────────────────
+  // ── Step 4: Second factor ────────────────────────────────────────
   if (preset) {
     console.log(dim(`  MFA: ${preset.mfaNote}`));
   } else {
-    console.log(dim("  MFA: You will be prompted to approve via Duo on your phone during auth."));
+    console.log(dim("  MFA: You will be prompted to approve your school's second factor during auth."));
   }
+  console.log("");
+  console.log(
+    dim("  Using an authenticator app? Paste its setup key (or the otpauth:// link"),
+  );
+  console.log(dim("  behind the QR code) to have codes filled in automatically."));
+  console.log(dim("  Press Enter to skip and type codes yourself."));
+
+  const totpSecret = await askTotpSecret();
   console.log("");
 
   // ── Step 5: Save config ──────────────────────────────────────────
@@ -372,11 +419,18 @@ async function main(): Promise<void> {
     baseUrl,
     username,
     password,
+    ...(totpSecret ? { totpSecret } : {}),
   };
 
   saveConfigStore(config);
   console.log(green("  Config saved to: " + getConfigStorePath()));
   console.log("");
+
+  // Re-open readline for remaining prompts
+  const rl2 = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 
   // ── Step 6: Authenticate now? ────────────────────────────────────
   const authNow = await ask(rl2, "Would you like to authenticate now? (yes/no): ");

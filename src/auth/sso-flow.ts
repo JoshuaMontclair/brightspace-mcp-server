@@ -22,10 +22,25 @@ export interface SSOFlow {
 
   /** Headed fallback: the user types credentials themselves. */
   manualLogin(page: Page): Promise<boolean>;
+
+  /**
+   * True when login can finish with nobody watching the browser window.
+   *
+   * Distinct from hasCredentials(): a school whose second factor is approved
+   * out of band (a push to the phone) stays unattended, while one that wants a
+   * code typed into the page does not — and hiding that window would strand
+   * the login with nothing to look at.
+   */
+  canRunUnattended(): boolean;
 }
 
 export interface SSOFlowConfig {
   baseUrl: string;
   username?: string;
   password?: string;
+  /**
+   * TOTP secret for schools whose second factor is an authenticator app.
+   * Raw base32 or a full otpauth:// URI; flows parse it via parseTotpSecret.
+   */
+  totpSecret?: string;
 }

@@ -39,7 +39,8 @@ npx brightspace-mcp-server setup --javeriana   # Pontificia Universidad Javerian
 
 The wizard:
 - prompts for the school's Brightspace URL (skipped when a school flag is given)
-- launches a Playwright Chromium browser for login and MFA (Duo push, etc.)
+- launches a Playwright Chromium browser for login and MFA (Duo push, authenticator code, etc.)
+- offers to save an authenticator-app setup key (base32 or `otpauth://` URI) so codes are filled in automatically
 - saves credentials to `~/.brightspace-mcp/config.json` (0600)
 - writes the encrypted session to `~/.d2l-session/session.json` (AES-256-GCM)
 - auto-configures Claude Desktop and Cursor if detected
@@ -64,7 +65,7 @@ Tell the user to fully quit and reopen their AI client so it picks up the new MC
 
 ## Re-auth
 
-Sessions auto-reauthenticate on expiry. If auto-reauth fails (missed Duo push, expired cookies, stale locks), run:
+Sessions auto-reauthenticate on expiry. If auth fails (missed push, rejected authenticator code, expired cookies, stale locks), run:
 
 ```bash
 npx brightspace-mcp-server auth
@@ -113,7 +114,7 @@ src/
   auth/
     auth-runner.ts          Orchestrates reauth on 401/expiry
     browser-auth.ts         Playwright-driven login flow
-    javeriana-sso.ts        Javeriana Cali SSO handler (MobilityGuard OneGate)
+    javeriana-sso.ts        Javeriana Cali SSO handler (MobilityGuard OneGate, incl. token login)
     purdue-sso.ts           Purdue SSO handler (Shibboleth + Duo)
     sso-factory.ts          Picks the login flow from the Brightspace hostname
     sso-flow.ts             SSOFlow interface every school handler implements
@@ -129,6 +130,7 @@ src/
     file-text.ts            Dispatches a downloaded file to a text extractor
     office-extractor.ts     xlsx/docx/pptx to text
     pdf-extractor.ts        PDF text extraction via unpdf
+    totp.ts                 RFC 6238 authenticator codes (base32 / otpauth:// URI)
     logger.ts               Structured logging
     update-checker.ts       npm version comparison
     errors.ts               User-facing error taxonomy

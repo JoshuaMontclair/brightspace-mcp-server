@@ -59,6 +59,7 @@ export function loadConfig(): AppConfig {
     headless,
     username: process.env.D2L_USERNAME || store?.username,
     password: process.env.D2L_PASSWORD || store?.password,
+    totpSecret: process.env.MFA_TOTP_SECRET || store?.totpSecret,
     courseFilter: {
       includeCourseIds,
       excludeCourseIds,

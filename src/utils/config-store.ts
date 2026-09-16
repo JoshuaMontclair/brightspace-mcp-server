@@ -13,6 +13,8 @@ export interface ConfigStoreData {
   baseUrl?: string;
   username?: string;
   password?: string;
+  /** TOTP shared secret (base32) or full otpauth:// URI for the second factor. */
+  totpSecret?: string;
   sessionDir?: string;
   tokenTtl?: number;
   headless?: boolean;

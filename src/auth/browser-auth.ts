@@ -25,6 +25,7 @@ export class BrowserAuth {
       baseUrl: config.baseUrl,
       username: config.username,
       password: config.password,
+      totpSecret: config.totpSecret,
     });
   }
 
@@ -185,14 +186,24 @@ export class BrowserAuth {
       // lock files persist and prevent all future auth attempts.
       await this.validateAndClearLockFiles(browserDataDir);
 
-      // Force headed mode when no credentials — user must interact with the browser
-      const headless = this.ssoFlow.hasCredentials() ? this.config.headless : false;
-      if (!this.ssoFlow.hasCredentials() && this.config.headless) {
-        log("INFO", "Overriding headless mode — browser must be visible for manual login");
+      // A hidden window is only safe when the flow can finish on its own;
+      // otherwise the login would stall with nothing for the user to look at.
+      const canRunUnattended = this.ssoFlow.canRunUnattended();
+      const headless = canRunUnattended ? this.config.headless : false;
+      if (!canRunUnattended && this.config.headless) {
+        log(
+          "INFO",
+          "Overriding headless mode — this login needs you to complete a step in the browser. " +
+            "Save your credentials (and authenticator secret, if your school uses one) to run hidden."
+        );
       }
 
       const launchOptions = {
         headless,
+        // Default headless wants chrome-headless-shell, which the install step
+        // never downloads. Pinning the channel runs new headless mode on the
+        // same binary headed mode already uses: no extra download, same engine.
+        ...(headless ? { channel: "chromium" } : {}),
         viewport: { width: 1280, height: 720 } as const,
         args: BrowserAuth.buildChromiumArgs(),
         timeout: 60000,
@@ -200,7 +211,7 @@ export class BrowserAuth {
 
       context = await this.launchBrowserWithRetry(browserDataDir, launchOptions);
 
-      log("INFO", "Browser context launched");
+      log("INFO", `Browser context launched${headless ? " (hidden)" : ""}`);
 
       // If the user Ctrl+C's while Chrome is running, Node tears down the
       // subprocess with SIGKILL — Chrome writes "Crashed" to exit_type, the
@@ -827,6 +838,7 @@ export class BrowserAuth {
     browserDataDir: string,
     options: {
       headless: boolean;
+      channel?: string;
       viewport: { readonly width: number; readonly height: number };
       args: string[];
       timeout: number;

@@ -35,6 +35,68 @@ describe("createSSOFlow", () => {
     expect(() => createSSOFlow({ baseUrl: "not a url" })).not.toThrow();
   });
 
+  it("does not throw on an unreadable TOTP secret", () => {
+    // A typo in the saved secret must degrade to "type the code yourself",
+    // never break a login that would otherwise work.
+    expect(() =>
+      createSSOFlow({
+        baseUrl: "https://auladigital.javerianacali.edu.co",
+        username: "u",
+        password: "p",
+        totpSecret: "not!a!valid!secret",
+      })
+    ).not.toThrow();
+  });
+
+  describe("canRunUnattended", () => {
+    const javeriana = "https://auladigital.javerianacali.edu.co";
+    const validSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    it("is false for Javeriana without a TOTP secret", () => {
+      // OneGate wants the code typed into the page, so someone has to watch.
+      expect(
+        createSSOFlow({ baseUrl: javeriana, username: "u", password: "p" })
+          .canRunUnattended()
+      ).toBe(false);
+    });
+
+    it("is true for Javeriana with credentials and a TOTP secret", () => {
+      expect(
+        createSSOFlow({
+          baseUrl: javeriana,
+          username: "u",
+          password: "p",
+          totpSecret: validSecret,
+        }).canRunUnattended()
+      ).toBe(true);
+    });
+
+    it("is false for Javeriana when the TOTP secret is unreadable", () => {
+      // Degrading to a visible window beats hiding a login nobody can finish.
+      expect(
+        createSSOFlow({
+          baseUrl: javeriana,
+          username: "u",
+          password: "p",
+          totpSecret: "not!a!secret",
+        }).canRunUnattended()
+      ).toBe(false);
+    });
+
+    it("is false without credentials, secret or not", () => {
+      expect(
+        createSSOFlow({ baseUrl: javeriana, totpSecret: validSecret })
+          .canRunUnattended()
+      ).toBe(false);
+    });
+
+    it("needs only credentials at Purdue, where Duo is approved on the phone", () => {
+      const baseUrl = "https://purdue.brightspace.com";
+      expect(createSSOFlow({ baseUrl, username: "u", password: "p" }).canRunUnattended()).toBe(true);
+      expect(createSSOFlow({ baseUrl, username: "u" }).canRunUnattended()).toBe(false);
+    });
+  });
+
   it("reports credentials only when both username and password are set", () => {
     const baseUrl = "https://auladigital.javerianacali.edu.co";
     expect(createSSOFlow({ baseUrl }).hasCredentials()).toBe(false);

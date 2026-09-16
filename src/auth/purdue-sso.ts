@@ -31,6 +31,14 @@ export class PurdueSSOFlow implements SSOFlow {
   }
 
   /**
+   * Duo is approved on the user's phone, not in the page, so a saved
+   * username and password are enough to run without a visible window.
+   */
+  canRunUnattended(): boolean {
+    return this.hasCredentials();
+  }
+
+  /**
    * Execute the complete Microsoft Entra ID SSO login flow for Purdue.
    * Handles institution selector, email/password entry, MFA (TOTP or manual), and "stay signed in" prompt.
    *

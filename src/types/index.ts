@@ -35,6 +35,8 @@ export interface AppConfig {
   headless: boolean;
   username?: string;
   password?: string;
+  /** TOTP shared secret (base32) or otpauth:// URI, when the school's second factor is an authenticator app. */
+  totpSecret?: string;
   courseFilter: CourseFilterConfig;
 }
 

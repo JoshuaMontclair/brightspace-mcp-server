@@ -46,6 +46,8 @@ npx brightspace-mcp-server setup --javeriana   # Pontificia Universidad Javerian
 
 The wizard walks you through login, MFA, and auto configures Claude Desktop and Cursor. Restart your AI client when it finishes.
 
+If your school's second factor is an authenticator app, the wizard asks for its setup key (the base32 code, or the `otpauth://` link behind the enrollment QR). Paste it and codes are generated locally at login, so re-authentication needs nothing from you. Skip it and you type codes yourself in the browser window instead. At Javeriana Cali this selects the "Doble Factor Token" login automatically.
+
 <details>
 <summary>Using a different client? Configure it manually.</summary>
 
@@ -63,11 +65,23 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
+Sessions re-authenticate automatically. If auto-reauth fails (e.g. you missed the push, or your device clock has drifted so authenticator codes are rejected):
 
 ```bash
 npx brightspace-mcp-server auth
 ```
+
+### Hiding the login window
+
+By default the browser is visible, so you can step in when a login needs you.
+Once yours runs start to finish on its own, hide it by adding `"headless": true`
+to `~/.brightspace-mcp/config.json` (or setting `D2L_HEADLESS=true`), and
+re-authentication becomes invisible.
+
+A login only qualifies as unattended when saved credentials cover every step —
+including an authenticator secret if your school asks for a code. When they
+don't, the window is shown regardless of this setting, because hiding it would
+strand the login with nothing for you to look at.
 
 ## What You Can Ask About
 
@@ -84,7 +98,8 @@ npx brightspace-mcp-server auth
 
 ## Security
 
-- Credentials stay on your machine at `~/.brightspace-mcp/config.json` (restricted permissions)
+- Credentials stay on your machine at `~/.brightspace-mcp/config.json` (owner-only permissions)
+- An authenticator secret saved there is a permanent second-factor key: treat it like the password, and re-enroll your token if it ever leaks
 - Session tokens are encrypted (AES-256-GCM)
 - All traffic to Brightspace is HTTPS
 - Nothing is sent anywhere except your school's login page
