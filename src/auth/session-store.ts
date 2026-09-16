@@ -130,8 +130,13 @@ export class SessionStore {
   /**
    * Decrypt ciphertext using AES-256-GCM.
    * Returns plaintext string, or throws if auth tag verification fails.
+   *
+   * The key is required, not defaulted to deriveKey(): a default would route a
+   * bare this.decrypt(x) through getOrCreateSalt(), minting a salt while reading
+   * old data and making a merely-unreadable session unrecoverable. Callers must
+   * say which key they mean.
    */
-  private decrypt(encrypted: EncryptedData, key: Buffer = this.deriveKey()): string {
+  private decrypt(encrypted: EncryptedData, key: Buffer): string {
     const iv = Buffer.from(encrypted.iv, "hex");
     const authTag = Buffer.from(encrypted.authTag, "hex");
 
@@ -167,13 +172,8 @@ export class SessionStore {
         expiresAt: token.expiresAt,
       };
 
-      await fs.writeFile(
-        this.sessionFilePath,
-        JSON.stringify(sessionFile, null, 2),
-        {
-          encoding: "utf-8",
-          ...(isWindows ? {} : { mode: 0o600 }),
-        }
+      await this.writeSessionFileAtomically(
+        JSON.stringify(sessionFile, null, 2)
       );
 
       log("DEBUG", `Session saved to ${this.sessionFilePath}`);
@@ -182,6 +182,71 @@ export class SessionStore {
         error instanceof Error ? error : new Error(String(error));
       log("ERROR", `Failed to save session: ${err.message}`);
       throw new SessionStoreError("Failed to save session", err);
+    }
+  }
+
+  /**
+   * Write the session file by creating a temp file and renaming it over the
+   * target, so a reader sees either the whole old file or the whole new one.
+   * fs.writeFile truncates in place, which means a crash, power loss or ENOSPC
+   * mid-write destroys the previous session — and since load() now writes too
+   * (the one-time legacy re-encryption), that would be a session that was
+   * perfectly readable a moment earlier.
+   *
+   * The temp file lives in the target's own directory: rename is only atomic
+   * within one filesystem, and os.tmpdir() may be on a different one.
+   */
+  private async writeSessionFileAtomically(contents: string): Promise<void> {
+    const isWindows = process.platform === "win32";
+    // pid plus random bytes: two processes saving at once must not pick the same
+    // temp path and rename each other's half-written file over the target.
+    const tempPath = `${this.sessionFilePath}.${process.pid}.${crypto
+      .randomBytes(6)
+      .toString("hex")}.tmp`;
+
+    try {
+      // The temp file holds a session token, so it is owner-only from creation
+      // rather than chmod'd afterwards. "wx" refuses to reuse a path that
+      // somehow already exists instead of overwriting whatever is there.
+      await fs.writeFile(tempPath, contents, {
+        encoding: "utf-8",
+        flag: "wx",
+        ...(isWindows ? {} : { mode: 0o600 }),
+      });
+      await this.renameOverSessionFile(tempPath);
+    } catch (error) {
+      // Never let a failing disk litter the session directory with tokens.
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  /**
+   * Rename the temp file over the session file, retrying briefly on Windows.
+   *
+   * POSIX rename over an existing file always succeeds atomically. Windows can
+   * fail it with EPERM/EACCES/EBUSY while another process has the target open —
+   * harmlessly, since the old file survives, but it would surface as a spurious
+   * save failure and cost the user a token refresh, so it is worth a few short
+   * retries. Other platforms take the single attempt.
+   */
+  private async renameOverSessionFile(tempPath: string): Promise<void> {
+    const maxAttempts = process.platform === "win32" ? 5 : 1;
+
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await fs.rename(tempPath, this.sessionFilePath);
+        return;
+      } catch (error: any) {
+        const transient =
+          error?.code === "EPERM" ||
+          error?.code === "EACCES" ||
+          error?.code === "EBUSY";
+        if (!transient || attempt >= maxAttempts) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20 * attempt));
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SessionStore } from "../../src/auth/session-store.js";
+import { SessionStoreError } from "../../src/utils/errors.js";
 import type { TokenData } from "../../src/types/index.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -40,7 +41,7 @@ describe("SessionStore", () => {
       // Access private methods via any cast for testing
       const store = sessionStore as any;
       const encrypted = store.encrypt(plaintext);
-      const decrypted = store.decrypt(encrypted);
+      const decrypted = store.decrypt(encrypted, store.deriveKey());
 
       expect(decrypted).toBe(plaintext);
       expect(encrypted.iv).toBeTruthy();
@@ -328,5 +329,121 @@ describe("SessionStore", () => {
       await fs.writeFile(saltPath, salt);
       expect(await sessionStore.load()).toEqual(token);
     });
+  });
+
+  describe("atomic save", () => {
+    // chmod is a no-op on Windows and file modes are not POSIX there, so the
+    // tests that hinge on either are Unix-only rather than silently vacuous.
+    const unixOnly = process.platform === "win32" ? it.skip : it;
+
+    const token: TokenData = {
+      accessToken: "test-token-atomic",
+      capturedAt: 1700000000000,
+      expiresAt: 1700003600000,
+      source: "browser",
+    };
+
+    /** Everything in the session dir that is not one of the two real files. */
+    async function strayFiles(): Promise<string[]> {
+      const entries = await fs.readdir(testDir);
+      return entries.filter((e) => e !== "session.json" && e !== "salt").sort();
+    }
+
+    it("leaves no temp file behind after a successful save", async () => {
+      await sessionStore.save(token);
+
+      expect(await strayFiles()).toEqual([]);
+    });
+
+    it("leaves no temp file behind when the write cannot be committed", async () => {
+      await fs.mkdir(testDir, { recursive: true });
+      // A directory where the session file belongs: the temp file is written and
+      // only the rename fails, which exercises the cleanup path rather than the
+      // cheaper case where nothing was ever created.
+      await fs.mkdir(path.join(testDir, "session.json"));
+
+      await expect(sessionStore.save(token)).rejects.toThrow(SessionStoreError);
+
+      expect(await strayFiles()).toEqual([]);
+    });
+
+    it("throws SessionStoreError when the session file cannot be written", async () => {
+      // A plain file where the session directory belongs, so mkdir cannot create it.
+      await fs.writeFile(testDir, "not a directory");
+      const blocked = new SessionStore(path.join(testDir, "nested"));
+
+      await expect(blocked.save(token)).rejects.toThrow(SessionStoreError);
+    });
+
+    unixOnly("saves the session file with owner-only permissions", async () => {
+      await sessionStore.save(token);
+
+      // The rename preserves the temp file's mode, so this also shows the temp
+      // file was created 0600 rather than widened and chmod'd afterwards.
+      const stats = await fs.stat(path.join(testDir, "session.json"));
+      expect(stats.mode & 0o777).toBe(0o600);
+    });
+
+    unixOnly("keeps the previous session loadable when a save fails", async () => {
+      await sessionStore.save(token);
+
+      // Read-only session dir: the save fails with a good session already on
+      // disk, which is exactly the crash-mid-write this change exists to survive.
+      await fs.chmod(testDir, 0o500);
+      try {
+        await expect(
+          sessionStore.save({ ...token, accessToken: "replacement-token" })
+        ).rejects.toThrow(SessionStoreError);
+      } finally {
+        await fs.chmod(testDir, 0o700);
+      }
+
+      expect(await sessionStore.load()).toEqual(token);
+    });
+
+    unixOnly(
+      "keeps a legacy session readable when its migration cannot be written",
+      async () => {
+        await fs.mkdir(testDir, { recursive: true });
+        const salt = crypto.randomBytes(16);
+        await fs.writeFile(path.join(testDir, "salt"), salt);
+
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv(
+          "aes-256-gcm",
+          crypto.scryptSync(os.userInfo().username + os.hostname(), salt, 32),
+          iv
+        );
+        let data = cipher.update(JSON.stringify(token), "utf8", "hex");
+        data += cipher.final("hex");
+        await fs.writeFile(
+          path.join(testDir, "session.json"),
+          JSON.stringify({
+            version: 1,
+            encrypted: {
+              iv: iv.toString("hex"),
+              authTag: cipher.getAuthTag().toString("hex"),
+              data,
+            },
+            createdAt: Date.now(),
+            expiresAt: token.expiresAt,
+          }),
+          "utf-8"
+        );
+
+        await fs.chmod(testDir, 0o500);
+        try {
+          // The in-place re-encryption fails, but it must not cost the caller
+          // the session it just decrypted.
+          expect(await sessionStore.load()).toEqual(token);
+        } finally {
+          await fs.chmod(testDir, 0o700);
+        }
+
+        // Still the legacy bytes, still readable: the next load retries.
+        expect(await sessionStore.load()).toEqual(token);
+        expect(await strayFiles()).toEqual([]);
+      }
+    );
   });
 });
